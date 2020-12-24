@@ -184,7 +184,7 @@ http://<Cloud9_address>:8080/api/v1/namespaces/prometheus/services/prometheus-ng
 
 在 Status --> Targets 下面可以看到 Prometheus 监控的各种对象和指标
 
-<img src="images/image-prometheus-server-url.jpg" alt="image-efs-create-sg-1" style="zoom:50%;" />
+<img src="images/image-prometheus-server-url.jpg" alt="image-prometheus-server-url" style="zoom:50%;" />
 
 
 
@@ -256,7 +256,7 @@ kubectl get secret --namespace grafana grafana -o jsonpath="{.data.admin-passwor
 - Prometheus data source 下拉框中选择 prometheus
 - 点击' Import '
 
-<img src="images/image-grafana-cluster-monitoring.jpg" alt="image-efs-create-sg-1" style="zoom:50%;" />
+<img src="images/image-grafana-cluster-monitoring.jpg" alt="image-grafana-cluster-monitoring" style="zoom:50%;" />
 
 
 
@@ -269,7 +269,7 @@ kubectl get secret --namespace grafana grafana -o jsonpath="{.data.admin-passwor
 - Prometheus data source下拉框中选择 prometheus
 - 点击' Import '
 
-<img src="images/image-grafana-pod-monitoring.jpg" alt="image-efs-create-sg-1" style="zoom:50%;" />
+<img src="images/image-grafana-pod-monitoring.jpg" alt="image-grafana-pod-monitoring" style="zoom:50%;" />
 
 
 
@@ -280,4 +280,4 @@ kubectl get secret --namespace grafana grafana -o jsonpath="{.data.admin-passwor
 - 点击 change uid，设置 uid
 - 点击' Import '
 
-<img src="images/image-grafana-apiserver.jpg" alt="image-efs-create-sg-1" style="zoom:50%;" />
+<img src="images/image-grafana-apiserver.jpg" alt="image-grafana-apiserver" style="zoom:50%;" />
