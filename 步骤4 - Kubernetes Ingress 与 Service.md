@@ -34,9 +34,9 @@ Selector:                 app=nginx
 Type:                     LoadBalancer
 IP:                       10.100.186.111
 LoadBalancer Ingress:     a40ddad4121f74da6bee4dacbf056e87-0dcb806a4efcaaf2.elb.cn-north-1.amazonaws.com.cn
-Port:                     <unset>  80/TCP
+Port:                     <unset>  28080/TCP
 TargetPort:               80/TCP
-NodePort:                 <unset>  32584/TCP
+NodePort:                 <unset>  31324/TCP
 Endpoints:                192.168.68.252:80
 Session Affinity:         None
 External Traffic Policy:  Cluster
@@ -59,7 +59,7 @@ spec:
   type: LoadBalancer
   ports:
   - protocol: TCP
-    port: 80
+    port: 28080
     targetPort: 80
 ```
 
@@ -229,7 +229,7 @@ cat << EOF > service-nlb-ip.yaml
 >     service.beta.kubernetes.io/aws-load-balancer-type: nlb-ip
 > spec:
 >   ports:
->     - port: 80
+>     - port: 28080
 >       targetPort: 80
 >       protocol: TCP
 >   type: LoadBalancer
@@ -254,16 +254,16 @@ Labels:                   <none>
 Annotations:              service.beta.kubernetes.io/aws-load-balancer-type: nlb-ip
 Selector:                 app=nginx
 Type:                     LoadBalancer
-IP:                       10.100.112.236
-LoadBalancer Ingress:     k8s-default-nginxser-1dec6ab0bb-b4411910bfb7199f.elb.cn-north-1.amazonaws.com.cn
-Port:                     <unset>  80/TCP
+IP:                       10.100.62.155
+LoadBalancer Ingress:     k8s-default-nginxser-eee9c60531-d8a49c4ed3e5bf23.elb.cn-north-1.amazonaws.com.cn
+Port:                     <unset>  28080/TCP
 TargetPort:               80/TCP
-NodePort:                 <unset>  30499/TCP
+NodePort:                 <unset>  32669/TCP
 Endpoints:                192.168.68.252:80
 Session Affinity:         None
 External Traffic Policy:  Cluster
 [ec2-user@ip-172-31-19-174 workspace]$ 
-[ec2-user@ip-172-31-19-174 workspace]$ curl -I k8s-default-nginxser-1dec6ab0bb-b4411910bfb7199f.elb.cn-north-1.amazonaws.com.cn
+[ec2-user@ip-172-31-19-174 workspace]$ curl -I k8s-default-nginxser-eee9c60531-d8a49c4ed3e5bf23.elb.cn-north-1.amazonaws.com.cn:28080
 HTTP/1.1 200 OK
 Server: nginx/1.19.6
 Date: Tue, 22 Dec 2020 10:09:45 GMT
@@ -277,7 +277,7 @@ Accept-Ranges: bytes
 
 在 AWS Console 上，查看 NLB 后面挂载的目标组，为 IP 模式；目标 IP 为 192.168.68.252，即上面 kubectl describe service 得到的 Endpoints 地址
 
-<img src="images/image-lb-controller-nlb-ip-2.jpg" alt="image-lb-controller-nlb-ip-2" style="zoom:50%;" />
+<img src="images/image-lb-controller-nlb-ip.jpg" alt="image-lb-controller-nlb-ip-2" style="zoom:50%;" />
 
 
 
@@ -285,17 +285,19 @@ Accept-Ranges: bytes
 
 接下来我们创建一个 Kubernetes Ingress 资源
 
-通过以下命令部署 2048 游戏
+通过以下命令下载 2048 游戏 yaml 文件
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.1.0/docs/examples/2048/2048_full.yaml
+curl -o 2048_full.yaml https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.1.0/docs/examples/2048/2048_full.yaml
 ```
 
 如果无法连接到 raw.githubusercontent.com 下载，可使用 resources/aws-loadbalancer-controller 下面的 yaml 文件 2048_full.yaml
 
-进入文件所在目录，部署 2048 游戏。也可以打开 yaml 文件查看，该文件里创建了一个 game-2048 namespace，并在这个 namespace 里创建了 deployment-2048，service-2048 和 ingress-2048。
+进入文件所在目录，部署 2048 游戏。也可以打开 yaml 文件查看，该文件里创建了一个 game-2048 namespace，并在这个 namespace 里创建了 deployment-2048，service-2048 和 ingress-2048。 
 
-其中 ingress 资源的配置如下，ingress.class 为 alb，将创建一个 internet-facing 的 IP 模式的 ALB。有关更多的 基于 ALB 的 Ingress 的使用和配置，可参考 https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/ingress/annotations/
+其中 ingress 资源的配置如下，ingress.class 为 alb，将创建一个 internet-facing 的 IP 模式的 ALB。通过 annotation 将 ALB 的侦听端口改为 28080。
+
+有关更多的 基于 ALB 的 Ingress 的使用和配置，可参考 https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/ingress/annotations/
 
 ```yaml
 ---
@@ -308,6 +310,7 @@ metadata:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 28080}]'
 spec:
   rules:
     - http:
@@ -330,22 +333,21 @@ kubectl apply -f 2048_full.yaml
 [ec2-user@ip-172-31-19-174 workspace]$ kubectl describe ing -n game-2048
 Name:             ingress-2048
 Namespace:        game-2048
-Address:          k8s-game2048-ingress2-399cd4b400-1374374836.cn-north-1.elb.amazonaws.com.cn
+Address:          k8s-game2048-ingress2-399cd4b400-1861204396.cn-north-1.elb.amazonaws.com.cn
 Default backend:  default-http-backend:80 (<error: endpoints "default-http-backend" not found>)
 Rules:
   Host        Path  Backends
   ----        ----  --------
   *           
               /*   service-2048:80 (192.168.73.39:80,192.168.75.61:80,192.168.82.18:80 + 2 more...)
-Annotations:  alb.ingress.kubernetes.io/scheme: internet-facing
+Annotations:  alb.ingress.kubernetes.io/listen-ports: [{"HTTP": 28080}]
+              alb.ingress.kubernetes.io/scheme: internet-facing
               alb.ingress.kubernetes.io/target-type: ip
               kubernetes.io/ingress.class: alb
 Events:
-  Type     Reason             Age   From     Message
-  ----     ------             ----  ----     -------
-  Warning  FailedDeployModel  21s   ingress  Failed deploy model due to ListenerNotFound: One or more listeners not found
-           status code: 400, request id: 728b4542-c731-498f-9a66-52ff46a774d9
-  Normal   SuccessfullyReconciled  21s  ingress  Successfully reconciled
+  Type    Reason                  Age   From     Message
+  ----    ------                  ----  ----     -------
+  Normal  SuccessfullyReconciled  33s   ingress  Successfully reconciled
 ```
 
 

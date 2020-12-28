@@ -128,13 +128,13 @@ webhook 部署完成后，创建一个 nginx service 检查 webhook 是否正常
 kubectl apply -f resources/nginx-app/nginx-nlb.yaml
 ```
 
-验证 nginx service 和 pod 正常运行
+验证 nginx service 和 pod 正常运行。为避免中国区备案问题，我们将 service 端口设为 28080.
 
 ```bash
 [ec2-user@ip-172-31-19-174 workspace]$ kubectl get svc,deploy,po
 NAME                    TYPE           CLUSTER-IP       EXTERNAL-IP                                                                         PORT(S)        AGE
 service/kubernetes      ClusterIP      10.100.0.1       <none>                                                                              443/TCP        3h6m
-service/service-nginx   LoadBalancer   10.100.186.111   a40ddad4121f74da6bee4dacbf056e87-0dcb806a4efcaaf2.elb.cn-north-1.amazonaws.com.cn   80:32584/TCP   10m
+service/service-nginx   LoadBalancer   10.100.186.111   a40ddad4121f74da6bee4dacbf056e87-0dcb806a4efcaaf2.elb.cn-north-1.amazonaws.com.cn   28080:31324/TCP   10m
 
 NAME                               READY   UP-TO-DATE   AVAILABLE   AGE
 deployment.apps/nginx-deployment   1/1     1            1           10m
@@ -147,14 +147,17 @@ pod/nginx-deployment-d46f5678b-w72lg   1/1     Running   0          10m
 
 ```bash
 ELB=$(kubectl get service service-nginx -o json | jq -r '.status.loadBalancer.ingress[].hostname')
-curl -i $ELB
+PORT=$(kubectl get service service-nginx -o json | jq -r '.spec.ports[].port')
+echo $ELB:$PORT
+curl -i $ELB:$PORT
 ```
 
 可以看到访问正常
 
 ```bash
 [ec2-user@ip-172-31-19-174 workspace]$ ELB=$(kubectl get service service-nginx -o json | jq -r '.status.loadBalancer.ingress[].hostname')
-[ec2-user@ip-172-31-19-174 workspace]$ curl -i $ELB
+[ec2-user@ip-172-31-19-174 workspace]$ PORT=$(kubectl get service service-nginx -o json | jq -r '.spec.ports[].port')
+[ec2-user@ip-172-31-19-174 workspace]$ curl -i $ELB:$PORT
 HTTP/1.1 200 OK
 Server: nginx/1.19.6
 Date: Mon, 21 Dec 2020 13:56:08 GMT

@@ -6,7 +6,7 @@ metadata:
     service.beta.kubernetes.io/aws-load-balancer-type: nlb-ip
 spec:
   ports:
-    - port: 80
+    - port: 28080
       targetPort: 80
       protocol: TCP
   type: LoadBalancer
