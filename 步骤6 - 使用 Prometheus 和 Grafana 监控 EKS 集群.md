@@ -155,7 +155,7 @@ spec:
     app: prometheus
     component: server
     release: prometheus
-  type: ClusterIP
+  type: LoadBalancer
 ```
 
 
@@ -168,23 +168,27 @@ kubectl apply -f prometheus-service.yaml
 
 
 
-使用 kube-proxy 访问 Prometheus 界面，在 Cloud9 中执行以下命令
+使用以下命令查看刚才创建的 Service 对应的 ELB 地址和端口
 
 ```bash
-kubectl proxy --port=8080 --address='0.0.0.0' --disle-filter=true
+ kubectl get svc prometheus-nginx -n prometheus
+```
+
+示例输出如下：
+
+```bash
+[ec2-user@ip-172-31-19-174 workspace]$ kubectl get svc prometheus-nginx -n prometheus
+NAME               TYPE           CLUSTER-IP       EXTERNAL-IP                                                                  PORT(S)          AGE
+prometheus-nginx   LoadBalancer   10.100.145.207   a8376d4d4dec148ffb68e93109cec38a-459084430.cn-north-1.elb.amazonaws.com.cn   9090:31097/TCP   8s
 ```
 
 
 
-打开浏览器，将 <Cloud9_address> 替换成 Cloud9 的 IP 或 公网 DNS 名，访问 Prometheus 界面。注意，要为 Cloud9 所在的 EC2 安全组放开 8080 端口。
-
-```
-http://<Cloud9_address>:8080/api/v1/namespaces/prometheus/services/prometheus-nginx/proxy/graph
-```
+打开浏览器，通过 ELB DNS 域名和端口访问 Prometheus 界面
 
 在 Status --> Targets 下面可以看到 Prometheus 监控的各种对象和指标
 
-<img src="images/image-prometheus-server-url.jpg" alt="image-prometheus-server-url" style="zoom:50%;" />
+<img src="images/image-prometheus-server-url-lb.jpg" alt="image-prometheus-server-url-lb" style="zoom:50%;" />
 
 
 
