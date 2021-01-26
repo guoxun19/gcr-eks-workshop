@@ -362,3 +362,287 @@ Events:
 
 <img src="images/image-lb-controller-alb-2.jpg" alt="image-lb-controller-alb-2" style="zoom:50%;" />
 
+
+
+## AWS Load Balancer Controller 与 TargetGroupBinding
+
+通过 AWS Load Balancer Controller，在创建 K8S Service 和 Ingress 时，Controller 会自动创建 AWS NLB 或 ALB 资源以及相应的 Target Group，并配置侦听器及相应的转发规则，同时将 Pod 注册到 Target Group 中（通过 instance 模式或 IP 模式）。如果客户手工在 NLB/ALB 上添加了其他转发规则，在 reconcile 时会被删除掉， Controller 会使其与 Service/Ingress yaml 中的定义保持一致；当 K8S Service 或 Ingress 删除时，对应的 NLB/ALB 和 Target Group 资源也一并被删除。
+
+有的客户希望在 EKS 集群之外统一管理 ALB/NLB，由客户自己而不是 AWS Load Balancer Controller 管理 ALB/NLB 和 Target Group 的生命周期；或者，需要 EKS Service 和 集群外的服务共享同一个 ALB/NLB，需要手工配置其他转发规则到 ALB/NLB 上并不希望 reconcile 时被删除。
+
+在上面的两种场景中，可以使用 AWS Load Balancer Controller 中的新功能 TargetGroupBinding，它允许客户在 EKS 集群之外自己创建和管理 NLB/ALB 和 TargetGroup，同时通过 TargetGroupBinding 实现 Service 中的 Pod 和 Target Group 的关联，以便完成 Pod 到 Target Group 的注册和注销。
+
+下面的实验包括以下几个步骤：
+
+1. 在 EKS 集群之外创建 ALB，Target Group（IP 模式和 instance 模式）
+
+2. IP 模式下，在 EKS 集群内创建 Service，然后创建 TargetGroupBinding 将 Service 关联到 Target Group；验证 Target Group 中自动注册了 Target（Pod），且通过 ALB 相应端口可正常访问 Pod 内服务
+
+3. Instance 模式下，在 EKS 集群内创建 Service，然后创建 TargetGroupBinding 将 Service 关联到 Target Group；验证 Target Group 中自动注册了 Target（EC2），且通过 ALB 相应端口可正常访问 Pod 内服务
+
+4. （以 IP 模式为例）扩容 Service 中的副本数，验证关联的 Target Group 中 Target 数也相应扩容；删除 TargetGroupBinding（即取消 Service 与 Target Group 的关联），验证Target Group 中的 Target 也相应注销
+
+   
+
+### 创建 ALB, Target Group 和 Listener
+
+在 EKS 集群外，我们通过命令行创建一个 internet-facing 的 ALB，一个 IP 模式的 Target Group 和 一个 instance 模式的 Target Group，并在这个 ALB 上为两个 Target Group 分别创建两个 Listener。
+
+#### 创建 ALB
+
+将下面的 子网、安全组 等内容替换为你自己环境中的实际值。创建完成后，记录下返回的 ALB ARN 值以便后续使用。
+
+```bash
+aws elbv2 create-load-balancer --name test-alb --subnets <SUBNET-ID-1> <SUBNET-ID-2> --security-groups <SG-ID> --scheme internet-facing --type application --ip-address-type ipv4
+```
+
+
+
+#### 创建 IP 模式的 Target Group 和对应的 Listener
+
+创建 Target Group：将下面 VPC ID 替换成你自己环境中的实际值（EKS 集群所在 VPC）。创建完成后，记录下返回的 Target Group ARN 以便后续使用。
+
+```bash
+aws elbv2 create-target-group --name test-tg-ip --protocol HTTP --port 80 --vpc-id <VPC_ID> --target-type ip
+```
+
+创建 Listener：将下面 ALB ARN 和 Target Group ARN 替换成你自己环境中的实际值（刚才创建返回的值）。
+
+```bash
+aws elbv2 create-listener --load-balancer-arn <ALB_ARN> --protocol HTTP --port 28080 --default-actions Type=forward,TargetGroupArn=<TG_IP_ARN>
+```
+
+#### 创建 instance 模式的 Target Group 和对应的 Listener
+
+创建 Target Group：将下面 VPC ID 替换成你自己环境中的实际值（EKS 集群所在 VPC）。创建完成后，记录下返回的 Target Group ARN 以便后续使用。
+
+在 instance 模式下，ALB 会通过 NodePort 将流量转发到 Pod，因此我们指定了 30001 作为 Target Group 的端口，后面创建 K8S Service 时也会使用对应的这个端口。
+
+```bash
+aws elbv2 create-target-group --name test-tg-instance --protocol HTTP --port 30001 --vpc-id <VPC_ID> --target-type instance
+```
+
+创建 Listener：将下面 ALB ARN 和 Target Group ARN 替换成你自己环境中的实际值（刚才创建返回的值）。
+
+```bash
+aws elbv2 create-listener --load-balancer-arn <ALB_ARN> --protocol HTTP --port 38080 --default-actions Type=forward,TargetGroupArn=<TG_INSTANCE_ARN>
+```
+
+
+
+ALB 和两个 Target Group 及对应的 Listener 创建完成后，我们可以通过控制台进行查看。
+
+<img src="images/image-lb-controller-tgb-1.jpg" alt="image-lb-controller-tgb-1"/>
+
+
+
+### IP 模式下的 TargetGroupBinding
+
+#### 在 EKS 集群中创建 Service
+
+创建一个 Headless Service 用于关联到 IP 模式的 Target Group。
+
+Service yaml 文件如下：
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: "nginx-tgb-svc-alb-ip"
+spec:
+  selector:
+    app: nginx
+  clusterIP: None
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+```
+
+创建 Service：
+
+```bash
+kubectl apply -f nginx-tgb-svc-alb-ip.yaml
+```
+
+#### 创建 TargetGroupBinding
+
+TargetGroupBinding yaml 文件如下，其中，将 targetGroupARN 替换成你自己刚才创建的 **IP** 模式的 Target Group ARN 值。
+
+```yaml
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: my-tgb-alb-ip
+spec:
+  serviceRef:
+    name: nginx-tgb-svc-alb-ip # route traffic to nginx-tgb-svc-alb-ip (ClusterIP=None)
+    port: 80
+  targetGroupARN: <TG_IP_ARN> # ALB and TG are created outside of EKS
+```
+
+创建 TargetGroupBinding：
+
+```bash
+kubectl apply -f tgb-alb-ip.yaml
+```
+
+
+
+#### 验证 Pod 已成功注册到 Target Group 中并可正常访问
+
+通过控制台可以看到，当 TargetGroupBinding 创建完成后，Service 对应的 Pod 就成功注册到 Target Group 中。
+
+<img src="images/image-lb-controller-tgb-ip.jpg" alt="image-lb-controller-tgb-ip"/>
+
+与 Service 对应的 Pod 是一致的：
+
+```bash
+$ kubectl describe svc nginx-tgb-svc-alb-ip
+Name:              nginx-tgb-svc-alb-ip
+Namespace:         default
+Labels:            <none>
+Annotations:       Selector:  app=nginx
+Type:              ClusterIP
+IP:                None
+Port:              <unset>  80/TCP
+TargetPort:        80/TCP
+Endpoints:         192.168.68.252:80
+Session Affinity:  None
+Events:            <none>
+```
+
+通过 ALB 及对应的端口（28080）访问该 Service，注意要为 ALB 的安全组放行 28080 端口。
+
+<img src="images/image-lb-controller-tgb-ip-2.jpg" alt="image-lb-controller-tgb-ip-2"/>
+
+
+
+### Instance 模式下的 TargetGroupBinding
+
+#### 在 EKS 集群中创建 Service
+
+创建一个 NodePort 类型的 Service 用于关联到 instance 模式的 Target Group，nodePort 指定为 30001 与 Target Group 一致。
+
+Service yaml 文件如下：
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: "nginx-tgb-svc-alb-instance"
+spec:
+  selector:
+    app: nginx
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+    nodePort: 30001
+```
+
+创建 Service：
+
+```bash
+kubectl apply -f nginx-tgb-svc-alb-instance.yaml
+```
+
+#### 创建 TargetGroupBinding
+
+TargetGroupBinding yaml 文件如下，其中，将 targetGroupARN 替换成你自己刚才创建的 **instance** 模式的 Target Group ARN 值。
+
+```yaml
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: my-tgb-alb-instance
+spec:
+  serviceRef:
+    name: nginx-tgb-svc-alb-instance # route traffic to nginx-tgb-svc-alb-instance (NodePort)
+    port: 80
+  targetGroupARN: <TG_INSTANCE_ARN> # ALB and TG are created outside of EKS
+```
+
+创建 TargetGroupBinding：
+
+```bash
+kubectl apply -f tgb-alb-instance.yaml
+```
+
+
+
+#### 验证 EC2 Instance 已成功注册到 Target Group 中并可正常访问
+
+通过控制台可以看到，当 TargetGroupBinding 创建完成后，EKS Node 所在的 EC2 instance 就成功注册到 Target Group 中。
+
+<img src="images/image-lb-controller-tgb-instance.jpg" alt="image-lb-controller-tgb-instance"/>
+
+通过 ALB 及对应的端口（38080）访问该 Service，注意要为 ALB 的安全组放行 38080 端口。
+
+<img src="images/image-lb-controller-tgb-instance-2.jpg" alt="image-lb-controller-tgb-instance-2"/>
+
+
+
+### Service 的更新与取消关联
+
+我们以 IP 模式为例，验证 Service 在扩容和删除时，TargetGroupBinding 会自动更新对应 Target Group 中的 Target。
+
+#### Service 扩容
+
+将 Service 对应的 deployment 副本数从 1 个修改为 4 个，观察 Target Group 的变化。
+
+```bash
+$ kubectl scale deployment nginx-deployment --replicas 4
+deployment.apps/nginx-deployment scaled
+```
+
+通过控制台可以看到，当 Service 扩容后，新创建的 Pod 成功注册到 Target Group 中。
+
+<img src="images/image-lb-controller-tgb-ip-scale.jpg" alt="image-lb-controller-tgb-ip-scale"/>
+
+与 Service 对应的 Pod 是一致的：
+
+```bash
+$ kubectl describe svc nginx-tgb-svc-alb-ip
+Name:              nginx-tgb-svc-alb-ip
+Namespace:         default
+Labels:            <none>
+Annotations:       Selector:  app=nginx
+Type:              ClusterIP
+IP:                None
+Port:              <unset>  80/TCP
+TargetPort:        80/TCP
+Endpoints:         192.168.37.209:80,192.168.41.89:80,192.168.52.97:80 + 1 more...
+Session Affinity:  None
+```
+
+
+
+#### Service 与 Target Group 取消关联
+
+将 IP 模式对应的 TargetGroupBinding 删除，观察 Target Group 的变化。
+
+查看现有的 TargetGroupBinding
+
+```bash
+$ kubectl get  targetgroupbindings.elbv2.k8s.aws
+NAME                          SERVICE-NAME                 SERVICE-PORT   TARGET-TYPE   AGE
+my-tgb-alb-instance           nginx-tgb-svc-alb-instance   80             instance      22m
+my-tgb-alb-ip                 nginx-tgb-svc-alb-ip         80             ip            34m
+```
+
+删除 my-tgb-alb-ip
+
+```bash
+$ kubectl delete targetgroupbindings.elbv2.k8s.aws  my-tgb-alb-ip
+targetgroupbinding.elbv2.k8s.aws "my-tgb-alb-ip" deleted
+```
+
+
+
+
+
+通过控制台可以看到，当 Service 删除后，对应的 Pod 从 Target Group 中注销。
+
+<img src="images/image-lb-controller-tgb-ip-delete.jpg" alt="image-lb-controller-tgb-ip-delete"/>
