@@ -366,23 +366,23 @@ Events:
 
 ## AWS Load Balancer Controller 与 TargetGroupBinding
 
-通过 AWS Load Balancer Controller，在创建 K8S Service 和 Ingress 时，Controller 会自动创建 AWS NLB 或 ALB 资源以及相应的 Target Group，并配置侦听器及相应的转发规则，同时将 Pod 注册到 Target Group 中（通过 instance 模式或 IP 模式）。如果客户手工在 NLB/ALB 上添加了其他转发规则，在 reconcile 时会被删除掉， Controller 会使其与 Service/Ingress yaml 中的定义保持一致；当 K8S Service 或 Ingress 删除时，对应的 NLB/ALB 和 Target Group 资源也一并被删除。
+通过 AWS Load Balancer Controller，在创建 Kubernetes Service 和 Ingress 资源时，Controller 会自动创建 AWS NLB 或 ALB 资源以及相应的 Target Group，将 Pod 注册到 Target Group 中（通过 instance 模式或 IP 模式），并配置侦听器和相应的转发规则以便将流量发送给 Pod。当 Kubernetes Service 或 Ingress 删除时，对应的 NLB/ALB 和 Target Group 资源也一并被删除。另外，如果客户手工在 NLB/ALB 上添加了其他侦听器或转发规则，在 Controller Reconcile 时会被删除掉，Controller 会使所有的侦听器和规则与 Service/Ingress yaml 中的定义保持一致。
 
-有的客户希望在 EKS 集群之外统一管理 ALB/NLB，由客户自己而不是 AWS Load Balancer Controller 管理 ALB/NLB 和 Target Group 的生命周期；或者，需要 EKS Service 和 集群外的服务共享同一个 ALB/NLB，需要手工配置其他转发规则到 ALB/NLB 上并不希望 reconcile 时被删除。
+在一些实际场景中，客户希望在 EKS 集群之外统一管理 ALB/NLB，由客户自己而不是 AWS Load Balancer Controller 管理 ALB/NLB 和 Target Group 的生命周期；或者，需要 EKS Service 和 集群外的服务共享同一个 ALB/NLB，需要在 ALB/NLB 上手工配置其他转发规则且不希望 Controller Reconcile 时被删除。
 
-在上面的两种场景中，可以使用 AWS Load Balancer Controller 中的新功能 TargetGroupBinding，它允许客户在 EKS 集群之外自己创建和管理 NLB/ALB 和 TargetGroup，同时通过 TargetGroupBinding 实现 Service 中的 Pod 和 Target Group 的关联，以便完成 Pod 到 Target Group 的注册和注销。
+在上面的两种场景中，我们可以使用 AWS Load Balancer Controller 中的新功能 TargetGroupBinding，它允许客户在 EKS 集群之外自己创建和管理 NLB/ALB 和 TargetGroup，或者在 NLB/ALB 上自己创建和管理其他的侦听器和规则。通过 TargetGroupBinding 可以将 Kubnernetes Service和指定的 Target Group 进行关联，帮助客户管理Pod 到 Target Group 的注册和注销；同时，它也只会管理与 Service 关联的特定 Target Group，而不会修改或删除同一个 NLB/ALB 上的任何其他内容。
 
-下面的实验包括以下几个步骤：
+本文通过实验演示 TargetGroupBinding 的创建和功能，实验以 ALB 为例，使用 NLB 时的配置和步骤一样。实验包括以下几个步骤：
 
-1. 在 EKS 集群之外创建 ALB，Target Group（IP 模式和 instance 模式）
+1. 在 EKS 集群之外创建 ALB，Target     Group（IP 模式和 instance 模式）
 
-2. IP 模式下，在 EKS 集群内创建 Service，然后创建 TargetGroupBinding 将 Service 关联到 Target Group；验证 Target Group 中自动注册了 Target（Pod），且通过 ALB 相应端口可正常访问 Pod 内服务
+2. IP 模式下，在 EKS 集群内创建 Service，然后创建 TargetGroupBinding 将 Service 关联到 Target     Group；验证 Target Group 中自动注册了 Target（Pod），且通过 ALB 相应端口可正常访问 Pod 内服务
 
 3. Instance 模式下，在 EKS 集群内创建 Service，然后创建 TargetGroupBinding 将 Service 关联到 Target Group；验证 Target Group 中自动注册了 Target（EC2），且通过 ALB 相应端口可正常访问 Pod 内服务
 
-4. （以 IP 模式为例）扩容 Service 中的副本数，验证关联的 Target Group 中 Target 数也相应扩容；删除 TargetGroupBinding（即取消 Service 与 Target Group 的关联），验证Target Group 中的 Target 也相应注销
+4. （以 IP 模式为例）扩容 Service 中的副本数，验证关联的 Target Group 中 Target 数也相应扩容；删除     TargetGroupBinding（即取消 Service 与 Target Group 的关联），验证Target Group 中的 Target 也相应注销
 
-   
+
 
 ### 创建 ALB, Target Group 和 Listener
 
@@ -436,6 +436,114 @@ ALB 和两个 Target Group 及对应的 Listener 创建完成后，我们可以�
 
 
 
+### TargetGroupBinding 参数介绍
+
+#### TargetGroupBinding Specification
+
+通过 AWS LoadBalancer Controller TargetGroupBinding 进行 Kubernetes Service 和 Target Group 绑定时，客户可以指定相关的参数。我们以下面这个 yaml 为例来解释各个参数的作用，详细信息可以参考 [Github](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/targetgroupbinding/spec/) 上的解释。
+
+```yaml
+apiVersion: elbv2.k8s.aws/v1beta1
+ kind: TargetGroupBinding
+ metadata:
+ name: <YOUR_TGB_NAME>
+ spec:
+ serviceRef:
+  name: <YOUR_K8S_SERVICE_NAME> # K8S Service you need to route traffic to
+  port: <YOUR_K8S_SERVICE_PORT> # K8S Service port you need to route traffic to
+ targetGroupARN: <YOUR_TARGET_GROUP_ARN> # Your existing ALB and TG created outside of EKS
+ networking: # Networking defines the networking rules to allow ELBV2 LoadBalancer to access targets in TargetGroup
+  ingress:
+  - from:
+   - securityGroup:
+     groupID: <YOUR_SG_ID> # Security Group allowed to access targets in TargetGroup
+   ports:
+   - protocol: <YOUR_PROTOCOL> # Protocol which should be made accessible on the targets in TargetGroup
+   port: <YOUR_PORT> # Port which should be made accessible on the targets in TargetGroup
+```
+
+
+
+TargetGroupBinding Specification 包括：
+
+**1.**  **targetGroupARN**
+
+​		String. 要关联到 Kubnernetes Service 的 Target Group ARN。Target Group 需要在 EKS 之外创建。
+
+**2.**  **serviceRef**
+
+​		name: string. 要关联的 Service 名称。
+
+​		port: IntOrString. 可选。要关联的 Service 的端口，如果没定义，则会根据关联 Service 的端口自动填充。
+
+**3.**  **NetworkingIngressRule**
+
+​		NetworkingIngressRule 定义了允许 ALB/NLB 访问 Target Group 中 Targets 的网络规则。如果没有在 TargetGroupBinding 中定义规则，则需要手工配置 EKS Worker Node 的安全组放行相应端口。其中，
+
+​	from 可定义为：
+
+- securityGroup: string，针对 ALB 使用，定义可访问 Targets 的安全组 ID。一般我们可写为 ALB 的安全组 ID。
+- ipBlock: string，针对 NLB 使用，定义可访问 Targets 的IP CIDR 段。由于 NLB 没有安全组，并且当 Target Group 以 IP 方式注册时，会将访问 Targets 的 IP 替换成 NLB的私有 IP。因此我们可写为 NLB 所在子网的 CIDR 段。
+
+port可定义为：
+
+- 可选。允许ALB/NLB 访问Targets 的网络端口。如果定义了端口，则会在 EKS Worker Node 安全组上放行相应端口；如果没有定义，则默认为放行所有端口。
+
+
+
+#### **TargetGroupBinding 示例**
+
+ALB TargetGroupBinding yaml 文件示例：
+
+```yaml
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+name: my-tgb-alb-ip
+spec:
+serviceRef:
+  name: nginx-tgb-svc-alb-ip # route traffic to nginx-tgb-svc-alb-ip
+  port: 80 # service port
+targetGroupARN: arn:aws-cn:elasticloadbalancing:cn-north-1:<account_id>:targetgroup/test-tg-ip/1ce5b7da835c9ffb # TG ARN
+networking:
+  ingress:
+  - from:
+    - securityGroup:
+        groupID: sg-XXX # ALB SG ID
+    ports:
+    - protocol: TCP # Allow all TCP traffic from ALB SG
+```
+
+ 
+
+NLB TargetGroupBinding yaml 文件示例：
+
+```yaml
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+name: my-tgb-nlb-ip
+spec:
+serviceRef:
+  name: nginx-tgb-svc-nlb-ip # srvice name
+  port: 9090 # service port
+targetGroupARN: arn:aws-cn:elasticloadbalancing:cn-north-1:<account_id>:targetgroup/test-tg/9f1777b2c36e0c8c # TG ARN
+networking:
+  ingress:
+  - from:
+    - ipBlock:
+        cidr: 192.168.32.0/19 # subnet-1 cidr
+    - ipBlock:
+        cidr: 192.168.64.0/19 # subnet-2 cidr
+    ports:
+    - protocol: TCP
+      port: 9090 # Only allow TCP 9090 from subnet cidr
+```
+
+ 
+
+
+
 ### IP 模式下的 TargetGroupBinding
 
 #### 在 EKS 集群中创建 Service
@@ -479,6 +587,13 @@ spec:
     name: nginx-tgb-svc-alb-ip # route traffic to nginx-tgb-svc-alb-ip (ClusterIP=None)
     port: 80
   targetGroupARN: <TG_IP_ARN> # ALB and TG are created outside of EKS
+  networking:
+  ingress:
+  - from:
+    - securityGroup:
+        groupID: <ALB_SG_ID> # ALB SG ID
+    ports:
+    - protocol: TCP # Allow all TCP traffic from ALB SG
 ```
 
 创建 TargetGroupBinding：
@@ -511,6 +626,12 @@ Endpoints:         192.168.68.252:80
 Session Affinity:  None
 Events:            <none>
 ```
+
+查看 EKS Worker Node 所在安全组，可以看到TargetGroupBinding 增加了一条安全组规则（在描述中有 elbv2.k8s.aws/targetGroupBinding=shared 字样），允许来自 ALB SG 的所有 TCP 流量，与我们在 yaml 文件中定义的一致。
+
+<img src="images/image-lb-controller-tgb-ip-sg.jpg" alt="image-lb-controller-tgb-ip-sg"/>
+
+
 
 通过 ALB 及对应的端口（28080）访问该 Service，注意要为 ALB 的安全组放行 28080 端口。
 
@@ -562,6 +683,14 @@ spec:
     name: nginx-tgb-svc-alb-instance # route traffic to nginx-tgb-svc-alb-instance (NodePort)
     port: 80
   targetGroupARN: <TG_INSTANCE_ARN> # ALB and TG are created outside of EKS
+  networking:
+  ingress:
+  - from:
+    - securityGroup:
+        groupID: <ALB_SG_ID>  # ALB SG ID
+    ports:
+    - protocol: TCP
+      port: 30001 # Allow 30001 TCP traffic from ALB SG
 ```
 
 创建 TargetGroupBinding：
@@ -577,6 +706,12 @@ kubectl apply -f tgb-alb-instance.yaml
 通过控制台可以看到，当 TargetGroupBinding 创建完成后，EKS Node 所在的 EC2 instance 就成功注册到 Target Group 中。
 
 <img src="images/image-lb-controller-tgb-instance.jpg" alt="image-lb-controller-tgb-instance"/>
+
+查看 EKS Worker Node 所在安全组，可以看到TargetGroupBinding 增加了一条安全组规则（在描述中有 elbv2.k8s.aws/targetGroupBinding=shared 字样），允许来自 ALB SG 的 30001 端口的 TCP 流量，与我们在 yaml 文件中定义的一致。
+
+<img src="images/image-lb-controller-tgb-instance-sg.jpg" alt="image-lb-controller-tgb-instance-sg"/>
+
+
 
 通过 ALB 及对应的端口（38080）访问该 Service，注意要为 ALB 的安全组放行 38080 端口。
 
